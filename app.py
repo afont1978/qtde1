@@ -1,3 +1,4 @@
+
 import json
 import time
 from typing import Any, Dict
@@ -41,6 +42,16 @@ st.markdown(
         border-radius: 16px;
         background: rgba(255,255,255,0.03);
         border: 1px solid rgba(255,255,255,0.06);
+    }
+    .live-pill {
+        display: inline-block;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        margin-left: 0.6rem;
+        color: #0b1220;
+        background: #8ef0c9;
     }
     </style>
     """,
@@ -139,6 +150,7 @@ def make_line_chart(df: pd.DataFrame, x: str, y_cols: list[str], title: str, y_t
         xaxis_title="Step",
         yaxis_title=y_title,
         uirevision=key or title,
+        transition=dict(duration=0),
     )
     return fig
 
@@ -165,6 +177,7 @@ def make_area_balance_chart(df: pd.DataFrame, key: str = "") -> go.Figure:
         yaxis_title="kW",
         legend=dict(orientation="h"),
         uirevision=key or "system_energy_balance",
+        transition=dict(duration=0),
     )
     return fig
 
@@ -187,6 +200,7 @@ def make_storage_chart(df: pd.DataFrame, key: str = "") -> go.Figure:
         yaxis2=dict(title="Hours", overlaying="y", side="right"),
         legend=dict(orientation="h"),
         uirevision=key or "storage_reserves",
+        transition=dict(duration=0),
     )
     return fig
 
@@ -208,6 +222,7 @@ def make_cost_chart(df: pd.DataFrame, key: str = "") -> go.Figure:
         legend=dict(orientation="h"),
         barmode="group",
         uirevision=key or "cost_chart",
+        transition=dict(duration=0),
     )
     return fig
 
@@ -215,14 +230,14 @@ def make_cost_chart(df: pd.DataFrame, key: str = "") -> go.Figure:
 def make_route_chart(df: pd.DataFrame, key: str = "") -> go.Figure:
     rc = route_counts(df)
     fig = px.bar(rc, x="route", y="count", color="route", color_discrete_map=ROUTE_COLORS, template="plotly_dark", title="Decision mix")
-    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False, uirevision=key or "decision_mix")
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False, uirevision=key or "decision_mix", transition=dict(duration=0))
     return fig
 
 
 def make_event_chart(df: pd.DataFrame, key: str = "") -> go.Figure:
     ev = active_events_counts(df)
     fig = px.bar(ev, x="event", y="count", template="plotly_dark", title="Event frequency")
-    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False, uirevision=key or "event_frequency")
+    fig.update_layout(margin=dict(l=20, r=20, t=50, b=20), height=260, showlegend=False, uirevision=key or "event_frequency", transition=dict(duration=0))
     return fig
 
 
@@ -231,6 +246,87 @@ def kpi_block(label: str, value: str, delta: str = "") -> None:
         st.markdown('<div class="metric-card">', unsafe_allow_html=True)
         st.metric(label, value, delta)
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_overview(df: pd.DataFrame, latest: Dict[str, Any], running: bool = False) -> None:
+    if df.empty:
+        st.info("No simulation data yet. Press Step or Start.")
+        return
+
+    ss = st.session_state
+    live_df = df.tail(int(ss["live_window"])).copy()
+    mode_txt = MODE_LABELS.get(str(latest.get("mode", "")), str(latest.get("mode", "")))
+    route_txt = format_route(str(latest.get("decision_route", "")))
+    q_share = (df["decision_route"] == "QUANTUM").mean() * 100.0 if "decision_route" in df.columns and len(df) > 0 else 0.0
+    fb_rate = df["fallback_triggered"].mean() * 100.0 if "fallback_triggered" in df.columns and len(df) > 0 else 0.0
+    avg_latency = float(df["exec_ms"].tail(24).mean()) if "exec_ms" in df.columns else 0.0
+    mean_conf = float(df["decision_confidence"].tail(24).mean() * 100.0) if "decision_confidence" in df.columns else 0.0
+
+    st.markdown(
+        f"### Overview {('<span class=\"live-pill\">LIVE</span>' if running else '')}",
+        unsafe_allow_html=True,
+    )
+
+    row1 = st.columns(6)
+    with row1[0]:
+        kpi_block("Mode", mode_txt)
+    with row1[1]:
+        kpi_block("Total demand", f"{latest.get('total_load_kw', 0.0):.1f} kW")
+    with row1[2]:
+        kpi_block("Renewable share", f"{latest.get('renewable_share', 0.0) * 100:.1f}%")
+    with row1[3]:
+        kpi_block("Battery SoC", f"{latest.get('battery_soc', 0.0) * 100:.1f}%")
+    with row1[4]:
+        kpi_block("H₂ reserve", f"{latest.get('h2_level_kg', 0.0):.1f} kg")
+    with row1[5]:
+        kpi_block("Resilience margin", f"{latest.get('resilience_margin_h', 0.0):.2f} h")
+
+    row2 = st.columns(6)
+    with row2[0]:
+        kpi_block("Grid exchange", f"{latest.get('grid_import_kw', 0.0) - latest.get('grid_export_kw', 0.0):.1f} kW")
+    with row2[1]:
+        kpi_block("Step cost", f"{latest.get('operating_cost_eur_step', 0.0):.2f} €")
+    with row2[2]:
+        kpi_block("Cumulative cost", f"{latest.get('cumulative_cost_eur', 0.0):.2f} €")
+    with row2[3]:
+        kpi_block("Quantum share", f"{q_share:.1f}%")
+    with row2[4]:
+        kpi_block("Fallback rate", f"{fb_rate:.1f}%")
+    with row2[5]:
+        kpi_block("Avg latency", f"{avg_latency:.0f} ms", f"Conf {mean_conf:.1f}%")
+
+    left, right = st.columns([2.2, 1.0])
+    with left:
+        st.plotly_chart(make_area_balance_chart(live_df, key="overview_balance"), use_container_width=True, key="plot_overview_balance")
+        c_a, c_b = st.columns(2)
+        with c_a:
+            st.plotly_chart(make_storage_chart(live_df, key="overview_storage"), use_container_width=True, key="plot_overview_storage")
+        with c_b:
+            st.plotly_chart(make_cost_chart(live_df, key="overview_cost"), use_container_width=True, key="plot_overview_cost")
+    with right:
+        st.plotly_chart(make_route_chart(df, key="overview_routes"), use_container_width=True, key="plot_overview_routes")
+        st.plotly_chart(make_event_chart(df, key="overview_events"), use_container_width=True, key="plot_overview_events")
+        st.markdown("### Current decision")
+        st.write(f"**Route:** {route_txt}")
+        st.write(f"**Confidence:** {latest.get('decision_confidence', 0.0) * 100:.1f}%")
+        st.write(f"**Latency:** {latest.get('exec_ms', 0)} ms")
+        st.write(f"**Fallback:** {'Yes' if latest.get('fallback_triggered', False) else 'No'}")
+        st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
+        reason_text = "No fallback reason."
+        reasons = latest.get("fallback_reasons")
+        if isinstance(reasons, list) and reasons:
+            reason_text = ", ".join(reasons)
+        st.markdown("### Fallback reasons")
+        st.caption(reason_text)
+
+    st.markdown("### Live operational snapshot")
+    snap_cols = [
+        "step_id", "mode", "scenario", "active_event", "pv_available_kw", "pv_used_kw",
+        "battery_soc", "electrolyzer_power_kw", "h2_level_kg", "fuel_cell_power_kw",
+        "grid_import_kw", "grid_export_kw", "operating_cost_eur_step", "decision_route",
+    ]
+    snap_cols = [c for c in snap_cols if c in df.columns]
+    st.dataframe(live_df[snap_cols].tail(12), use_container_width=True, height=320)
 
 
 init_state()
@@ -252,17 +348,19 @@ with st.sidebar:
 
     st.divider()
     ss["live_window"] = st.slider("Visible live window (steps)", 12, 96, int(ss["live_window"]), step=6)
-    ss["batch_steps"] = st.slider("Steps per batch", 1, 24, int(ss["batch_steps"]), step=1)
-    ss["sleep_s"] = st.slider("Delay between batches (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
+    ss["batch_steps"] = st.slider("Steps per visible run", 1, 24, int(ss["batch_steps"]), step=1)
+    ss["sleep_s"] = st.slider("Delay between visible steps (s)", 0.05, 1.00, float(ss["sleep_s"]), step=0.05)
 
     st.divider()
     c1, c2 = st.columns(2)
     with c1:
         if st.button("▶ Start", use_container_width=True):
             ss["running"] = True
+            st.rerun()
     with c2:
         if st.button("⏸ Pause", use_container_width=True):
             ss["running"] = False
+            st.rerun()
 
     c3, c4 = st.columns(2)
     with c3:
@@ -280,16 +378,9 @@ with st.sidebar:
     st.write(f"**Scenario:** {SCENARIO_LABELS[ss['scenario']]}")
     st.write(f"**Seed:** {ss['seed']}")
     st.write(f"**Live window:** {ss['live_window']}")
+    st.write(f"**Status:** {'Running' if ss['running'] else 'Paused'}")
 
-if ss["running"]:
-    for _ in range(int(ss["batch_steps"])):
-        ss["rt"].step()
-    time.sleep(float(ss["sleep_s"]))
-    st.rerun()
-
-df = get_df()
-latest = latest_record(df)
-
+# Header
 st.markdown(
     """
     <div class="hero">
@@ -305,79 +396,25 @@ st.markdown(
 tab_overview, tab_twin, tab_audit, tab_arch = st.tabs(["Overview", "Twin drill-down", "Audit inspector", "Architecture & Use Case"])
 
 with tab_overview:
-    if df.empty:
-        st.info("No simulation data yet. Press Step or Start.")
-    else:
-        live_df = df.tail(int(ss["live_window"])).copy()
-        mode_txt = MODE_LABELS.get(str(latest.get("mode", "")), str(latest.get("mode", "")))
-        route_txt = format_route(str(latest.get("decision_route", "")))
-        q_share = (df["decision_route"] == "QUANTUM").mean() * 100.0 if "decision_route" in df.columns and len(df) > 0 else 0.0
-        fb_rate = df["fallback_triggered"].mean() * 100.0 if "fallback_triggered" in df.columns and len(df) > 0 else 0.0
-        avg_latency = float(df["exec_ms"].tail(24).mean()) if "exec_ms" in df.columns else 0.0
-        mean_conf = float(df["decision_confidence"].tail(24).mean() * 100.0) if "decision_confidence" in df.columns else 0.0
+    overview_placeholder = st.empty()
+    initial_df = get_df()
+    initial_latest = latest_record(initial_df)
+    with overview_placeholder.container():
+        render_overview(initial_df, initial_latest, running=ss["running"])
 
-        row1 = st.columns(6)
-        with row1[0]:
-            kpi_block("Mode", mode_txt)
-        with row1[1]:
-            kpi_block("Total demand", f"{latest.get('total_load_kw', 0.0):.1f} kW")
-        with row1[2]:
-            kpi_block("Renewable share", f"{latest.get('renewable_share', 0.0) * 100:.1f}%")
-        with row1[3]:
-            kpi_block("Battery SoC", f"{latest.get('battery_soc', 0.0) * 100:.1f}%")
-        with row1[4]:
-            kpi_block("H₂ reserve", f"{latest.get('h2_level_kg', 0.0):.1f} kg")
-        with row1[5]:
-            kpi_block("Resilience margin", f"{latest.get('resilience_margin_h', 0.0):.2f} h")
-
-        row2 = st.columns(6)
-        with row2[0]:
-            kpi_block("Grid exchange", f"{latest.get('grid_import_kw', 0.0) - latest.get('grid_export_kw', 0.0):.1f} kW")
-        with row2[1]:
-            kpi_block("Step cost", f"{latest.get('operating_cost_eur_step', 0.0):.2f} €")
-        with row2[2]:
-            kpi_block("Cumulative cost", f"{latest.get('cumulative_cost_eur', 0.0):.2f} €")
-        with row2[3]:
-            kpi_block("Quantum share", f"{q_share:.1f}%")
-        with row2[4]:
-            kpi_block("Fallback rate", f"{fb_rate:.1f}%")
-        with row2[5]:
-            kpi_block("Avg latency", f"{avg_latency:.0f} ms", f"Conf {mean_conf:.1f}%")
-
-        left, right = st.columns([2.2, 1.0])
-        with left:
-            st.plotly_chart(make_area_balance_chart(live_df, key="overview_balance"), use_container_width=True, key="plot_overview_balance")
-            c_a, c_b = st.columns(2)
-            with c_a:
-                st.plotly_chart(make_storage_chart(live_df, key="overview_storage"), use_container_width=True, key="plot_overview_storage")
-            with c_b:
-                st.plotly_chart(make_cost_chart(live_df, key="overview_cost"), use_container_width=True, key="plot_overview_cost")
-        with right:
-            st.plotly_chart(make_route_chart(df, key="overview_routes"), use_container_width=True, key="plot_overview_routes")
-            st.plotly_chart(make_event_chart(df, key="overview_events"), use_container_width=True, key="plot_overview_events")
-            st.markdown("### Current decision")
-            st.write(f"**Route:** {route_txt}")
-            st.write(f"**Confidence:** {latest.get('decision_confidence', 0.0) * 100:.1f}%")
-            st.write(f"**Latency:** {latest.get('exec_ms', 0)} ms")
-            st.write(f"**Fallback:** {'Yes' if latest.get('fallback_triggered', False) else 'No'}")
-            st.write(f"**Active event:** {latest.get('active_event', 'none') or 'none'}")
-            reason_text = "No fallback reason."
-            reasons = latest.get("fallback_reasons")
-            if isinstance(reasons, list) and reasons:
-                reason_text = ", ".join(reasons)
-            st.markdown("### Fallback reasons")
-            st.caption(reason_text)
-
-        st.markdown("### Live operational snapshot")
-        snap_cols = [
-            "step_id", "mode", "scenario", "active_event", "pv_available_kw", "pv_used_kw",
-            "battery_soc", "electrolyzer_power_kw", "h2_level_kg", "fuel_cell_power_kw",
-            "grid_import_kw", "grid_export_kw", "operating_cost_eur_step", "decision_route",
-        ]
-        snap_cols = [c for c in snap_cols if c in df.columns]
-        st.dataframe(live_df[snap_cols].tail(12), use_container_width=True, height=320)
+    if ss["running"]:
+        # Animate visible steps inside the same run so charts visibly evolve.
+        for _ in range(int(ss["batch_steps"])):
+            ss["rt"].step()
+            step_df = get_df()
+            step_latest = latest_record(step_df)
+            with overview_placeholder.container():
+                render_overview(step_df, step_latest, running=True)
+            time.sleep(float(ss["sleep_s"]))
+        st.rerun()
 
 with tab_twin:
+    df = get_df()
     snapshots = ss["rt"].twin_snapshot()
     twin_options = ["battery", "electrolyzer", "h2_tank", "fuel_cell", "pv_array", "grid_connection", "critical_load_block", "flex_load_block"]
     twin_sel = st.selectbox("Select asset", twin_options, index=0)
@@ -430,6 +467,7 @@ with tab_twin:
         st.json(snapshots.get(twin_sel, {}))
 
 with tab_audit:
+    df = get_df()
     if df.empty:
         st.info("No records yet.")
     else:
